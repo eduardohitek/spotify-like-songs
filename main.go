@@ -221,6 +221,7 @@ func checkSongAlreadyInPlaylist(accessToken, playListID, trackID string) (bool, 
 }
 
 func main() {
+	loadEnvFile()
 
 	clientID := os.Getenv("SPOTIFY_CLIENT_ID")
 	clientSecret := os.Getenv("SPOTIFY_CLIENT_SECRET")
