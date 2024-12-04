@@ -146,10 +146,17 @@ func searchPlaylist(accessToken, playlistName string) (string, error) {
 	defer resp.Body.Close()
 
 	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
+	err = json.NewDecoder(resp.Body).Decode(&result)
+	if err != nil {
+		log.Println("Error on decoding response body from searching playlist:", err)
+		return "", err
+	}
 
 	playlists := result["items"].([]interface{})
 	for _, playlist := range playlists {
+		if playlist == nil {
+			continue
+		}
 		pl := playlist.(map[string]interface{})
 		if pl["name"].(string) == playlistName {
 			return pl["id"].(string), nil
