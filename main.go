@@ -14,15 +14,20 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// Spotify API base URLs
 const (
 	baseAPIURL      = "https://api.spotify.com/v1"
 	refreshTokenURL = "https://accounts.spotify.com/api/token"
 )
 
-// Struct for response data
 type AccessTokenResponse struct {
 	AccessToken string `json:"access_token"`
+}
+
+type SpotifyErrorResponse struct {
+	Error struct {
+		Status  int    `json:"status"`
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 type LikedSongsSearchResponse struct {
@@ -46,11 +51,11 @@ type Artist struct {
 	Name string `json:"name"`
 }
 
-// Function to get a new access token using the refresh token
 func getAccessToken(clientID, clientSecret, refreshToken string) (string, error) {
-	req, err := http.NewRequest("POST", refreshTokenURL, strings.NewReader(fmt.Sprintf("grant_type=refresh_token&refresh_token=%s", refreshToken)))
+	body := fmt.Sprintf("grant_type=refresh_token&refresh_token=%s", refreshToken)
+	req, err := http.NewRequest("POST", refreshTokenURL, strings.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to create token request: %w", err)
 	}
 	req.SetBasicAuth(clientID, clientSecret)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -58,41 +63,63 @@ func getAccessToken(clientID, clientSecret, refreshToken string) (string, error)
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("token request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		log.Printf("Token endpoint returned %d: %s", resp.StatusCode, string(respBody))
+		return "", fmt.Errorf("token endpoint returned status %d", resp.StatusCode)
+	}
+
 	var tokenResponse AccessTokenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResponse); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to decode token response: %w", err)
+	}
+
+	if tokenResponse.AccessToken == "" {
+		return "", fmt.Errorf("received empty access token from Spotify")
 	}
 
 	return tokenResponse.AccessToken, nil
 }
 
-// Function to get liked songs
 func getLikedSongs(accessToken string) ([]Track, error) {
-	var response LikedSongsSearchResponse
-	req, _ := http.NewRequest("GET", baseAPIURL+"/me/tracks?limit=50", nil)
+	req, err := http.NewRequest("GET", baseAPIURL+"/me/tracks?limit=50", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create liked songs request: %w", err)
+	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("liked songs request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	err = json.Unmarshal(body, &response)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read liked songs response: %w", err)
 	}
-	likedTrackforCurrentMonth := filterLikedSongsForCurrentMonth(response)
 
-	log.Printf("Were found %d liked song(s) for this month", len(likedTrackforCurrentMonth))
+	if resp.StatusCode != http.StatusOK {
+		var spotifyErr SpotifyErrorResponse
+		json.Unmarshal(body, &spotifyErr)
+		log.Printf("Liked songs endpoint returned %d: %s", resp.StatusCode, spotifyErr.Error.Message)
+		return nil, fmt.Errorf("liked songs endpoint returned status %d", resp.StatusCode)
+	}
 
-	return likedTrackforCurrentMonth, nil
+	var response LikedSongsSearchResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("failed to decode liked songs: %w", err)
+	}
+
+	likedTracksForCurrentMonth := filterLikedSongsForCurrentMonth(response)
+	log.Printf("Found %d liked song(s) for this month", len(likedTracksForCurrentMonth))
+
+	return likedTracksForCurrentMonth, nil
 }
 
 func filterLikedSongsForCurrentMonth(likedSongs LikedSongsSearchResponse) []Track {
@@ -105,61 +132,93 @@ func filterLikedSongsForCurrentMonth(likedSongs LikedSongsSearchResponse) []Trac
 	return likedSongsForCurrentMonth
 }
 
-// Function to create a playlist
-func createPlaylist(accessToken string, playlistName string) (string, error) {
-	userID := "eduardohitek" // Replace with your Spotify User ID
+func createPlaylist(accessToken, playlistName string) (string, error) {
+	userID := "eduardohitek"
 	payload := map[string]string{
 		"name":        playlistName,
 		"description": "Monthly Playlist",
 		"public":      "false",
 	}
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal playlist payload: %w", err)
+	}
 
-	req, _ := http.NewRequest("POST", baseAPIURL+"/users/"+userID+"/playlists", bytes.NewBuffer(body))
+	req, err := http.NewRequest("POST", baseAPIURL+"/users/"+userID+"/playlists", bytes.NewBuffer(body))
+	if err != nil {
+		return "", fmt.Errorf("failed to create playlist request: %w", err)
+	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("create playlist request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read create playlist response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		var spotifyErr SpotifyErrorResponse
+		json.Unmarshal(respBody, &spotifyErr)
+		log.Printf("Create playlist endpoint returned %d: %s", resp.StatusCode, spotifyErr.Error.Message)
+		return "", fmt.Errorf("create playlist endpoint returned status %d", resp.StatusCode)
+	}
+
 	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("failed to decode create playlist response: %w", err)
+	}
+
 	idRaw := result["id"]
 	if idRaw == nil {
-		return "", fmt.Errorf("failed to create playlist: unexpected response")
+		return "", fmt.Errorf("failed to create playlist: no id in response")
 	}
-	playlistID := idRaw.(string)
 
-	return playlistID, nil
+	return idRaw.(string), nil
 }
 
-// Function to search for an existing playlist
 func searchPlaylist(accessToken, playlistName string) (string, error) {
-	req, _ := http.NewRequest("GET", baseAPIURL+"/me/playlists?limit=50", nil)
+	req, err := http.NewRequest("GET", baseAPIURL+"/me/playlists?limit=50", nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create search playlist request: %w", err)
+	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("search playlist request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	var result map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&result)
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Println("Error on decoding response body from searching playlist:", err)
-		return "", err
+		return "", fmt.Errorf("failed to read search playlist response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var spotifyErr SpotifyErrorResponse
+		json.Unmarshal(respBody, &spotifyErr)
+		log.Printf("Search playlist endpoint returned %d: %s", resp.StatusCode, spotifyErr.Error.Message)
+		return "", fmt.Errorf("search playlist endpoint returned status %d", resp.StatusCode)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("failed to decode search playlist response: %w", err)
 	}
 
 	itemsRaw := result["items"]
 	if itemsRaw == nil {
 		return "", nil
 	}
+
 	playlists := itemsRaw.([]interface{})
 	for _, playlist := range playlists {
 		if playlist == nil {
@@ -178,34 +237,44 @@ func searchPlaylist(accessToken, playlistName string) (string, error) {
 	return "", nil
 }
 
-// Function to add a song to a playlist
 func addSongToPlaylist(accessToken, playlistID string, tracks []Track) error {
 	for _, track := range tracks {
-		log.Printf("Checking if the track %s by %s is already in the playlist.\n", track.Name, track.Artists[0].Name)
+		log.Printf("Checking if track %q by %s is already in the playlist", track.Name, track.Artists[0].Name)
 		exists, err := checkSongAlreadyInPlaylist(accessToken, playlistID, track.ID)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to check track %q: %w", track.ID, err)
 		}
 		if !exists {
-			log.Printf("Adding the track %s by %s to the playlist.\n", track.Name, track.Artists[0].Name)
+			log.Printf("Adding track %q by %s to the playlist", track.Name, track.Artists[0].Name)
 
-			req, _ := http.NewRequest("POST", baseAPIURL+"/playlists/"+playlistID+"/tracks?uris=spotify:track:"+track.ID, nil)
+			url := fmt.Sprintf("%s/playlists/%s/tracks?uris=spotify:track:%s", baseAPIURL, playlistID, track.ID)
+			req, err := http.NewRequest("POST", url, nil)
+			if err != nil {
+				return fmt.Errorf("failed to create add track request: %w", err)
+			}
 			req.Header.Set("Authorization", "Bearer "+accessToken)
 			req.Header.Set("Content-Type", "application/json")
 
 			client := &http.Client{}
-			_, err := client.Do(req)
+			resp, err := client.Do(req)
 			if err != nil {
-				log.Println(err)
-				return err
+				return fmt.Errorf("add track request failed: %w", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+				respBody, _ := io.ReadAll(resp.Body)
+				var spotifyErr SpotifyErrorResponse
+				json.Unmarshal(respBody, &spotifyErr)
+				log.Printf("Add track endpoint returned %d: %s", resp.StatusCode, spotifyErr.Error.Message)
+				return fmt.Errorf("add track endpoint returned status %d for track %q", resp.StatusCode, track.ID)
 			}
 		}
 	}
 	return nil
 }
 
-func checkSongAlreadyInPlaylist(accessToken, playListID, trackID string) (bool, error) {
-
+func checkSongAlreadyInPlaylist(accessToken, playlistID, trackID string) (bool, error) {
 	var response struct {
 		Items []struct {
 			Track struct {
@@ -214,21 +283,34 @@ func checkSongAlreadyInPlaylist(accessToken, playListID, trackID string) (bool, 
 		} `json:"items"`
 	}
 
-	req, _ := http.NewRequest("GET", baseAPIURL+"/playlists/"+playListID+"/tracks?limit=100", nil)
+	req, err := http.NewRequest("GET", baseAPIURL+"/playlists/"+playlistID+"/tracks?limit=100", nil)
+	if err != nil {
+		return false, fmt.Errorf("failed to create check tracks request: %w", err)
+	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("check tracks request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	err = json.Unmarshal(body, &response)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to read check tracks response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var spotifyErr SpotifyErrorResponse
+		json.Unmarshal(body, &spotifyErr)
+		log.Printf("Check tracks endpoint returned %d: %s", resp.StatusCode, spotifyErr.Error.Message)
+		return false, fmt.Errorf("check tracks endpoint returned status %d", resp.StatusCode)
+	}
+
+	if err := json.Unmarshal(body, &response); err != nil {
+		return false, fmt.Errorf("failed to decode check tracks response: %w", err)
 	}
 
 	for _, item := range response.Items {
@@ -237,7 +319,6 @@ func checkSongAlreadyInPlaylist(accessToken, playListID, trackID string) (bool, 
 		}
 	}
 	return false, nil
-
 }
 
 func main() {
@@ -246,58 +327,64 @@ func main() {
 	clientID := os.Getenv("SPOTIFY_CLIENT_ID")
 	clientSecret := os.Getenv("SPOTIFY_CLIENT_SECRET")
 	refreshToken := os.Getenv("SPOTIFY_REFRESH_TOKEN")
-	// Get the current month and year for playlist naming
+
+	if clientID == "" {
+		log.Fatal("SPOTIFY_CLIENT_ID is not set")
+	}
+	if clientSecret == "" {
+		log.Fatal("SPOTIFY_CLIENT_SECRET is not set")
+	}
+	if refreshToken == "" {
+		log.Fatal("SPOTIFY_REFRESH_TOKEN is not set")
+	}
+
 	currentTime := time.Now()
 	playlistName := fmt.Sprintf("%s'%d", currentTime.Format("Jan"), currentTime.Year()%100)
+	log.Printf("Starting monthly playlist update for %q", playlistName)
 
-	// Get access token
 	accessToken, err := getAccessToken(clientID, clientSecret, refreshToken)
 	if err != nil {
-		fmt.Println("Error getting access token:", err)
-		return
+		log.Fatalf("Error getting access token: %v", err)
 	}
+	log.Println("Access token obtained successfully")
 
-	// Get the latest liked song
 	likedSongs, err := getLikedSongs(accessToken)
 	if err != nil {
-		fmt.Println("Error getting liked songs:", err)
-		return
+		log.Fatalf("Error getting liked songs: %v", err)
 	}
 
-	// Check if the playlist exists
 	playlistID, err := searchPlaylist(accessToken, playlistName)
 	if err != nil {
-		fmt.Println("Error searching playlist:", err)
-		return
+		log.Fatalf("Error searching playlist: %v", err)
 	}
 
-	// If playlist doesn't exist, create it
 	if playlistID == "" {
+		log.Printf("Playlist %q not found, creating it", playlistName)
 		playlistID, err = createPlaylist(accessToken, playlistName)
 		if err != nil {
-			fmt.Println("Error creating playlist:", err)
-			return
+			log.Fatalf("Error creating playlist: %v", err)
+		}
+		log.Printf("Playlist created with ID: %q", playlistID)
+	} else {
+		log.Printf("Found existing playlist with ID: %q", playlistID)
+	}
+
+	if len(likedSongs) > 0 {
+		if err := addSongToPlaylist(accessToken, playlistID, likedSongs); err != nil {
+			log.Fatalf("Error adding songs to playlist: %v", err)
 		}
 	}
 
-	// Add the liked song to the playlist
-	err = addSongToPlaylist(accessToken, playlistID, likedSongs)
-	if err != nil {
-		fmt.Println("Error adding song to playlist:", err)
-		return
-	}
-
-	fmt.Println("Song added to playlist:", playlistName)
+	log.Printf("Done! Playlist %q updated successfully", playlistName)
 }
 
 func loadEnvFile() {
 	file, err := os.Stat(".env.local")
 	if err != nil {
-		if !os.IsNotExist(err) {
-			panic(err)
+		if os.IsNotExist(err) {
+			return
 		}
-
-		return
+		panic(err)
 	}
 
 	if err := godotenv.Load(file.Name()); err != nil {
