@@ -128,7 +128,11 @@ func createPlaylist(accessToken string, playlistName string) (string, error) {
 
 	var result map[string]interface{}
 	json.NewDecoder(resp.Body).Decode(&result)
-	playlistID := result["id"].(string)
+	idRaw := result["id"]
+	if idRaw == nil {
+		return "", fmt.Errorf("failed to create playlist: unexpected response")
+	}
+	playlistID := idRaw.(string)
 
 	return playlistID, nil
 }
@@ -162,8 +166,13 @@ func searchPlaylist(accessToken, playlistName string) (string, error) {
 			continue
 		}
 		pl := playlist.(map[string]interface{})
-		if pl["name"].(string) == playlistName {
-			return pl["id"].(string), nil
+		nameRaw := pl["name"]
+		idRaw := pl["id"]
+		if nameRaw == nil || idRaw == nil {
+			continue
+		}
+		if nameRaw.(string) == playlistName {
+			return idRaw.(string), nil
 		}
 	}
 	return "", nil
