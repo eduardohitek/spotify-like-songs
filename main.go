@@ -152,7 +152,11 @@ func searchPlaylist(accessToken, playlistName string) (string, error) {
 		return "", err
 	}
 
-	playlists := result["items"].([]interface{})
+	itemsRaw := result["items"]
+	if itemsRaw == nil {
+		return "", nil
+	}
+	playlists := itemsRaw.([]interface{})
 	for _, playlist := range playlists {
 		if playlist == nil {
 			continue
