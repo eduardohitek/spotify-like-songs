@@ -1,2 +1,8 @@
 .env.local
-.env.local
+
+# Local builds
+/auth
+/spotify-cli
+
+# Serena
+.serena/
