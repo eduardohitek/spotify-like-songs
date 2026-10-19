@@ -19,7 +19,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Run Spotify Automation
-        run: go run main.go
+        run: go run ./cmd/monthly-playlist
         env:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}

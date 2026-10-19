@@ -3,6 +3,7 @@
 # Local builds
 /auth
 /spotify-cli
+/monthly-playlist
 
 # Serena
 .serena/
