@@ -24,3 +24,16 @@ jobs:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+
+  # GitHub disables scheduled workflows after 60 days without repository activity;
+  # re-enabling through the API resets that timer.
+  keepalive:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+
+    steps:
+      - name: Keep scheduled workflow enabled
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/spotify-automation.yaml/enable"
+        env:
+          GH_TOKEN: ${{ github.token }}
