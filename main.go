@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -20,7 +21,8 @@ const (
 )
 
 type AccessTokenResponse struct {
-	AccessToken string `json:"access_token"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 type SpotifyErrorResponse struct {
@@ -52,8 +54,10 @@ type Artist struct {
 }
 
 func getAccessToken(clientID, clientSecret, refreshToken string) (string, error) {
-	body := fmt.Sprintf("grant_type=refresh_token&refresh_token=%s", refreshToken)
-	req, err := http.NewRequest("POST", refreshTokenURL, strings.NewReader(body))
+	data := url.Values{}
+	data.Set("grant_type", "refresh_token")
+	data.Set("refresh_token", refreshToken)
+	req, err := http.NewRequest("POST", refreshTokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
 		return "", fmt.Errorf("failed to create token request: %w", err)
 	}
@@ -80,6 +84,11 @@ func getAccessToken(clientID, clientSecret, refreshToken string) (string, error)
 
 	if tokenResponse.AccessToken == "" {
 		return "", fmt.Errorf("received empty access token from Spotify")
+	}
+
+	// The new value is intentionally not logged: it would not be masked in CI logs.
+	if tokenResponse.RefreshToken != "" && tokenResponse.RefreshToken != refreshToken {
+		log.Printf("Warning: Spotify rotated the refresh token; the current SPOTIFY_REFRESH_TOKEN may stop working. Regenerate it with `go run ./cmd/auth` and update the secret.")
 	}
 
 	return tokenResponse.AccessToken, nil
